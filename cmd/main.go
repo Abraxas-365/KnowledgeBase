@@ -150,7 +150,6 @@ func main() {
 			Name:     "oauth_state",
 			Value:    state,
 			HTTPOnly: true,
-			Secure:   true,
 		})
 		return c.Redirect(authURL)
 	})
