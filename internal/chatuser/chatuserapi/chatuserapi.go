@@ -3,16 +3,16 @@ package chatuserapi
 import (
 	"github.com/Abraxas-365/opd/internal/chatuser"
 	"github.com/Abraxas-365/opd/internal/chatuser/chatusersrv"
-	"github.com/Abraxas-365/opd/internal/user"
-	"github.com/Abraxas-365/toolkit/pkg/lucia"
+	"github.com/Abraxas-365/opd/pkg/middleware"
 	"github.com/gofiber/fiber/v2"
 )
 
 // SetupRoutes sets up the API routes for the chat user service
+// Updated to accept JWTAuthMiddleware instead of lucia.AuthMiddleware
 func SetupRoutes(
 	app *fiber.App,
 	service *chatusersrv.Service,
-	authMiddleware *lucia.AuthMiddleware[*user.User],
+	authMiddleware *middleware.JWTAuthMiddleware,
 ) {
 
 	// Get chat user by ID

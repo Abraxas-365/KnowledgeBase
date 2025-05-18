@@ -53,11 +53,13 @@ func (s *Service) CreateUser(ctx context.Context, userInfo *lucia.UserInfo) (*us
 	}
 
 	u := &user.User{
-		ID:         lucia.GenerateID(),
-		Email:      userInfo.Email,
-		IsAdmin:    true,
-		Provider:   userInfo.Provider,
-		ProviderID: userInfo.ID,
+		ID:               lucia.GenerateID(),
+		Email:            userInfo.Email,
+		IsAdmin:          false,
+		Provider:         userInfo.Provider,
+		ProviderID:       userInfo.ID,
+		Role:             user.RoleLinkoUser,
+		SubscriptionType: user.FreeTier,
 	}
 
 	u, err = s.repo.CreateUser(ctx, u)
@@ -78,6 +80,26 @@ func (s *Service) GetNotAdminUsers(ctx context.Context, page, pageSize int) (dat
 
 func (s *Service) GetUsersAdminRole(ctx context.Context, page, pageSize int) (database.PaginatedRecord[user.User], error) {
 	return s.repo.GetUsersAdminRole(ctx, page, pageSize)
+}
+
+func (s *Service) GetUsersByRole(ctx context.Context, role user.Role, page, pageSize int) (database.PaginatedRecord[user.User], error) {
+	return s.repo.GetUsersByRole(ctx, role, page, pageSize)
+}
+
+func (s *Service) GetUsersBySubscription(ctx context.Context, subscriptionType user.SubscriptionType, page, pageSize int) (database.PaginatedRecord[user.User], error) {
+	return s.repo.GetUsersBySubscription(ctx, subscriptionType, page, pageSize)
+}
+
+func (s *Service) UpdateUser(ctx context.Context, u *user.User) (*user.User, error) {
+	return s.repo.UpdateUser(ctx, u)
+}
+
+func (s *Service) UpdateUserRole(ctx context.Context, userID string, role user.Role) error {
+	return s.repo.UpdateUserRole(ctx, userID, role)
+}
+
+func (s *Service) UpdateUserSubscription(ctx context.Context, userID string, subscriptionType user.SubscriptionType) error {
+	return s.repo.UpdateUserSubscription(ctx, userID, subscriptionType)
 }
 
 func (s *Service) PromoteUserToAdmin(ctx context.Context, userID string) error {

@@ -51,72 +51,6 @@ func (s *PostgresStore) CreateUser(ctx context.Context, u *user.User) (*user.Use
 	return u, nil
 }
 
-// GetUsers retrieves a paginated list of all users
-func (s *PostgresStore) GetUsers(ctx context.Context, page, pageSize int) (database.PaginatedRecord[user.User], error) {
-	offset := (page - 1) * pageSize
-	query := `SELECT id, email, is_admin FROM "user" LIMIT $1 OFFSET $2`
-	var users []user.User
-	err := s.db.SelectContext(ctx, &users, query, pageSize, offset)
-	if err != nil {
-		return database.PaginatedRecord[user.User]{}, errors.ErrDatabase(fmt.Sprintf("Failed to get users: %v", err))
-	}
-	total, err := s.getTotalCount(ctx, `SELECT COUNT(*) FROM "user"`)
-	if err != nil {
-		return database.PaginatedRecord[user.User]{}, err
-	}
-	return database.PaginatedRecord[user.User]{
-		Data:       users,
-		PageNumber: page,
-		PageSize:   pageSize,
-		Total:      total,
-	}, nil
-}
-
-// GetNotAdminUsers retrieves users without admin privileges
-func (s *PostgresStore) GetNotAdminUsers(ctx context.Context, page, pageSize int) (database.PaginatedRecord[user.User], error) {
-	offset := (page - 1) * pageSize
-	query := `SELECT id, email, is_admin FROM "user" WHERE is_admin = false LIMIT $1 OFFSET $2`
-	var users []user.User
-	err := s.db.SelectContext(ctx, &users, query, pageSize, offset)
-	if err != nil {
-		return database.PaginatedRecord[user.User]{}, errors.ErrDatabase(fmt.Sprintf("Failed to get not-admin users: %v", err))
-	}
-	total, err := s.getTotalCount(ctx, `SELECT COUNT(*) FROM "user" WHERE is_admin = false`)
-	if err != nil {
-		return database.PaginatedRecord[user.User]{}, err
-	}
-
-	return database.PaginatedRecord[user.User]{
-		Data:       users,
-		PageNumber: page,
-		PageSize:   pageSize,
-		Total:      total,
-	}, nil
-}
-
-// GetUsersAdminRole retrieves users with admin privileges
-func (s *PostgresStore) GetUsersAdminRole(ctx context.Context, page, pageSize int) (database.PaginatedRecord[user.User], error) {
-	offset := (page - 1) * pageSize
-	query := `SELECT id, email, is_admin FROM "user" WHERE is_admin = true LIMIT $1 OFFSET $2`
-	var users []user.User
-	err := s.db.SelectContext(ctx, &users, query, pageSize, offset)
-	if err != nil {
-		return database.PaginatedRecord[user.User]{}, errors.ErrDatabase(fmt.Sprintf("Failed to get admin users: %v", err))
-	}
-
-	total, err := s.getTotalCount(ctx, `SELECT COUNT(*) FROM "user" WHERE is_admin = true`)
-	if err != nil {
-		return database.PaginatedRecord[user.User]{}, err
-	}
-
-	return database.PaginatedRecord[user.User]{
-		Data:       users,
-		PageNumber: page,
-		PageSize:   pageSize,
-		Total:      total,
-	}, nil
-}
-
 // UpdateUser updates user information
 func (s *PostgresStore) UpdateUser(ctx context.Context, u *user.User) (*user.User, error) {
 	query := `UPDATE "user" SET email = $2, is_admin = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $1 RETURNING id, email, is_admin`
@@ -201,11 +135,168 @@ func (s *PostgresStore) PromoteUserToAdmin(ctx context.Context, userID string) e
 	return nil
 }
 
-func (s *PostgresStore) getTotalCount(ctx context.Context, query string, args ...interface{}) (int, error) {
+func (s *PostgresStore) GetTotalCount(ctx context.Context, query string, args ...interface{}) (int, error) {
 	var total int
 	err := s.db.GetContext(ctx, &total, query, args...)
 	if err != nil {
 		return 0, errors.ErrDatabase(fmt.Sprintf("Failed to get total count: %v", err))
 	}
 	return total, nil
+}
+
+// GetUsers retrieves a paginated list of all users
+func (s *PostgresStore) GetUsers(ctx context.Context, page, pageSize int) (database.PaginatedRecord[user.User], error) {
+	offset := (page - 1) * pageSize
+	query := `SELECT id, email, is_admin, role, subscription_type FROM "user" LIMIT $1 OFFSET $2`
+	var users []user.User
+	err := s.db.SelectContext(ctx, &users, query, pageSize, offset)
+	if err != nil {
+		return database.PaginatedRecord[user.User]{}, errors.ErrDatabase(fmt.Sprintf("Failed to get users: %v", err))
+	}
+	total, err := s.GetTotalCount(ctx, `SELECT COUNT(*) FROM "user"`) // Updated method call
+	if err != nil {
+		return database.PaginatedRecord[user.User]{}, err
+	}
+	return database.PaginatedRecord[user.User]{
+		Data:       users,
+		PageNumber: page,
+		PageSize:   pageSize,
+		Total:      total,
+	}, nil
+}
+
+// GetNotAdminUsers retrieves users without admin privileges
+func (s *PostgresStore) GetNotAdminUsers(ctx context.Context, page, pageSize int) (database.PaginatedRecord[user.User], error) {
+	offset := (page - 1) * pageSize
+	query := `SELECT id, email, is_admin, role, subscription_type FROM "user" WHERE is_admin = false LIMIT $1 OFFSET $2`
+	var users []user.User
+	err := s.db.SelectContext(ctx, &users, query, pageSize, offset)
+	if err != nil {
+		return database.PaginatedRecord[user.User]{}, errors.ErrDatabase(fmt.Sprintf("Failed to get not-admin users: %v", err))
+	}
+	total, err := s.GetTotalCount(ctx, `SELECT COUNT(*) FROM "user" WHERE is_admin = false`) // Updated method call
+	if err != nil {
+		return database.PaginatedRecord[user.User]{}, err
+	}
+
+	return database.PaginatedRecord[user.User]{
+		Data:       users,
+		PageNumber: page,
+		PageSize:   pageSize,
+		Total:      total,
+	}, nil
+}
+
+// GetUsersAdminRole retrieves users with admin privileges
+func (s *PostgresStore) GetUsersAdminRole(ctx context.Context, page, pageSize int) (database.PaginatedRecord[user.User], error) {
+	offset := (page - 1) * pageSize
+	query := `SELECT id, email, is_admin, role, subscription_type FROM "user" WHERE is_admin = true OR role = 'admin' LIMIT $1 OFFSET $2`
+	var users []user.User
+	err := s.db.SelectContext(ctx, &users, query, pageSize, offset)
+	if err != nil {
+		return database.PaginatedRecord[user.User]{}, errors.ErrDatabase(fmt.Sprintf("Failed to get admin users: %v", err))
+	}
+
+	total, err := s.GetTotalCount(ctx, `SELECT COUNT(*) FROM "user" WHERE is_admin = true OR role = 'admin'`) // Updated method call
+	if err != nil {
+		return database.PaginatedRecord[user.User]{}, err
+	}
+
+	return database.PaginatedRecord[user.User]{
+		Data:       users,
+		PageNumber: page,
+		PageSize:   pageSize,
+		Total:      total,
+	}, nil
+}
+
+// UpdateUserRole updates a user's role
+func (s *PostgresStore) UpdateUserRole(ctx context.Context, userID string, role user.Role) error {
+	query := `UPDATE "user" SET role = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1`
+	result, err := s.db.ExecContext(ctx, query, userID, role)
+	if err != nil {
+		return errors.ErrDatabase(fmt.Sprintf("Failed to update user role: %v", err))
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return errors.ErrNotFound("User not found")
+	}
+
+	return nil
+}
+
+// UpdateUserSubscription updates a user's subscription type
+func (s *PostgresStore) UpdateUserSubscription(ctx context.Context, userID string, subscriptionType user.SubscriptionType) error {
+	// First check if user is a linko-user
+	var role user.Role
+	checkQuery := `SELECT role FROM "user" WHERE id = $1`
+	err := s.db.GetContext(ctx, &role, checkQuery, userID)
+	if err != nil {
+		return errors.ErrNotFound("User not found")
+	}
+
+	if role != user.RoleLinkoUser {
+		return errors.ErrBadRequest("Only linko-users can have subscription types")
+	}
+
+	// Update subscription
+	query := `UPDATE "user" SET subscription_type = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1`
+	result, err := s.db.ExecContext(ctx, query, userID, subscriptionType)
+	if err != nil {
+		return errors.ErrDatabase(fmt.Sprintf("Failed to update user subscription: %v", err))
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return errors.ErrNotFound("User not found")
+	}
+
+	return nil
+}
+
+// GetUsersByRole retrieves users with a specific role n
+func (s *PostgresStore) GetUsersByRole(ctx context.Context, role user.Role, page, pageSize int) (database.PaginatedRecord[user.User], error) {
+	offset := (page - 1) * pageSize
+	query := `SELECT id, email, is_admin, role, subscription_type FROM "user" WHERE role = $1 LIMIT $2 OFFSET $3`
+	var users []user.User
+	err := s.db.SelectContext(ctx, &users, query, role, pageSize, offset)
+	if err != nil {
+		return database.PaginatedRecord[user.User]{}, errors.ErrDatabase(fmt.Sprintf("Failed to get users by role: %v", err))
+	}
+
+	total, err := s.GetTotalCount(ctx, `SELECT COUNT(*) FROM "user" WHERE role = $1`, role)
+	if err != nil {
+		return database.PaginatedRecord[user.User]{}, err
+	}
+
+	return database.PaginatedRecord[user.User]{
+		Data:       users,
+		PageNumber: page,
+		PageSize:   pageSize,
+		Total:      total,
+	}, nil
+}
+
+// GetUsersBySubscription retrieves users with a specific subscription type n
+func (s *PostgresStore) GetUsersBySubscription(ctx context.Context, subscriptionType user.SubscriptionType, page, pageSize int) (database.PaginatedRecord[user.User], error) {
+	offset := (page - 1) * pageSize
+	query := `SELECT id, email, is_admin, role, subscription_type FROM "user" WHERE subscription_type = $1 LIMIT $2 OFFSET $3`
+	var users []user.User
+	err := s.db.SelectContext(ctx, &users, query, subscriptionType, pageSize, offset)
+	if err != nil {
+		return database.PaginatedRecord[user.User]{}, errors.ErrDatabase(fmt.Sprintf("Failed to get users by subscription: %v", err))
+	}
+
+	total, err := s.GetTotalCount(ctx, `SELECT COUNT(*) FROM "user" WHERE subscription_type = $1`, subscriptionType)
+	if err != nil {
+		return database.PaginatedRecord[user.User]{}, err
+	}
+
+	return database.PaginatedRecord[user.User]{
+		Data:       users,
+		PageNumber: page,
+		PageSize:   pageSize,
+		Total:      total,
+	}, nil
 }

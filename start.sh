@@ -18,11 +18,15 @@ Here are the search results in numbered order:
 Here is the user's query:
 \$query\$"
 export KB_REGION="us-1"
-
+export JWT_SECRET="your-secret-key-change-in-production"
+export JWT_ACCESS_DURATION="3600"  # 1 hour in seconds
+export JWT_REFRESH_DURATION="604800"  # 7 days in seconds
 export GOOGLE_CLIENT_ID="22795433123-3tqiop2jfekacg2ig7toen3hpbimjlv5.apps.googleusercontent.com"
 export GOOGLE_CLIENT_SECRET="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"
 export GOOGLE_REDIRECT_URI="http://localhost:3000/login/google/callback"
 export DATABASE_URL="postgresql://myuser:mypassword@localhost:5432/mydatabase"
 export REDIRECT_AFTER_LOGIN="http://localhost:3001"
+
+
 
 go run cmd/main.go

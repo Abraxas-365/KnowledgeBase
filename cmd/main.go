@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
+	"time"
 
 	"github.com/Abraxas-365/opd/internal/analitics/analiticsapi"
 	analyticsinfra "github.com/Abraxas-365/opd/internal/analitics/analiticsinfra"
@@ -20,6 +23,8 @@ import (
 	"github.com/Abraxas-365/opd/internal/user/userinfra"
 	"github.com/Abraxas-365/opd/internal/user/usersrv"
 	"github.com/Abraxas-365/opd/pkg/conf"
+	"github.com/Abraxas-365/opd/pkg/jwt"
+	"github.com/Abraxas-365/opd/pkg/middleware"
 	"github.com/Abraxas-365/toolkit/pkg/errors"
 	"github.com/Abraxas-365/toolkit/pkg/lucia"
 	"github.com/Abraxas-365/toolkit/pkg/lucia/luciastore"
@@ -30,12 +35,11 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/bedrockagent"
 	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/middleware/cors"
+	fiberCors "github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/jmoiron/sqlx"
 )
 
 func main() {
-
 	conf := conf.Load()
 
 	db, err := sqlx.Connect("postgres", conf.DatabaseURL)
@@ -43,6 +47,7 @@ func main() {
 		panic(err)
 	}
 
+	// Initialize repositories and services
 	userRepo := userinfra.NewUserStore(db)
 	userSrv := usersrv.NewService(userRepo)
 	analrepo := analyticsinfra.NewAnalyticsStore(db)
@@ -72,6 +77,7 @@ func main() {
 	)
 	authSrv.RegisterProvider("google", googleProvider)
 
+	// Initialize AWS services
 	cfg, err := config.LoadDefaultConfig(context.TODO(),
 		config.WithRegion("us-east-1"),
 	)
@@ -87,25 +93,52 @@ func main() {
 		Region: aws.String("us-east-1"),
 	})))
 
-	// Then modify the kbService initialization to include the brClient:
+	// Initialize knowledge base service
 	kbSerive := kbsrv.New(client, brClient, repo, s3client, *userSrv, *chatUserSrv, *interactionSrv)
 
+	// Initialize JWT service
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		jwtSecret = "your-secret-key-change-in-production" // For development only
+	}
+
+	accessTokenDuration := 1 * time.Hour       // Default 1 hour
+	refreshTokenDuration := 7 * 24 * time.Hour // Default 7 days
+
+	// Allow configuring token durations via environment variables
+	if durationStr := os.Getenv("JWT_ACCESS_DURATION"); durationStr != "" {
+		if seconds, err := strconv.Atoi(durationStr); err == nil && seconds > 0 {
+			accessTokenDuration = time.Duration(seconds) * time.Second
+		}
+	}
+
+	if durationStr := os.Getenv("JWT_REFRESH_DURATION"); durationStr != "" {
+		if seconds, err := strconv.Atoi(durationStr); err == nil && seconds > 0 {
+			refreshTokenDuration = time.Duration(seconds) * time.Second
+		}
+	}
+
+	jwtService := jwt.NewJWTService(jwtSecret, accessTokenDuration, refreshTokenDuration)
+	jwtMiddleware := middleware.NewJWTAuthMiddleware(jwtService, userSrv)
+
 	app := fiber.New()
-	authMiddleware := lucia.NewAuthMiddleware(authSrv)
-	app.Use(authMiddleware.SessionMiddleware())
+
+	// Apply JWT middleware globally
+	app.Use(jwtMiddleware.AuthMiddleware())
 
 	// Add CORS middleware
-	app.Use(cors.New(cors.Config{
+	app.Use(fiberCors.New(fiberCors.Config{
 		AllowOrigins:     conf.AllowOrigins,
 		AllowCredentials: true,
 		AllowHeaders:     "Origin, Content-Type, Accept, Authorization",
 		AllowMethods:     "GET,POST,HEAD,PUT,DELETE,PATCH,OPTIONS",
 	}))
 
-	kbapi.SetupRoutes(app, kbSerive, authMiddleware)
-	userapi.SetupRoutes(app, userSrv, authMiddleware)
-	analiticsapi.SetupRoutes(app, analSrv, authMiddleware)
-	chatuserapi.SetupRoutes(app, chatUserSrv, authMiddleware)
+	// Setup API routes
+	kbapi.SetupRoutes(app, kbSerive, jwtMiddleware)
+	userapi.SetupRoutes(app, userSrv, jwtMiddleware)
+	analiticsapi.SetupRoutes(app, analSrv, jwtMiddleware)
+	chatuserapi.SetupRoutes(app, chatUserSrv, jwtMiddleware)
 
 	// Google OAuth routes
 	app.Get("/login/google", func(c *fiber.Ctx) error {
@@ -133,36 +166,87 @@ func main() {
 			return errors.ErrBadRequest("Missing code")
 		}
 
+		// Use the lucia auth service to handle the OAuth callback
 		session, err := authSrv.HandleCallback(c.Context(), "google", code)
 		if err != nil {
 			return err
 		}
 
-		// Set session cookie
-		lucia.SetSessionCookie(c, session)
-
-		// Return session ID in JSON response for the frontend to access
-		res := c.JSON(fiber.Map{
-			"session_id": session.ID, // Assuming session has an ID field
-			"message":    "Login successful",
-		})
-
-		fmt.Println(res)
-
-		return c.Redirect(conf.RedirectAfterLogin)
-	})
-	// Logout route
-	app.Post("/logout", func(c *fiber.Ctx) error {
-		session := lucia.GetSession(c)
-		if session != nil {
-			if err := authSrv.DeleteSession(c.Context(), session.ID); err != nil {
-				return err
-			}
+		// Get user from session
+		userID, err := session.UserIDToString()
+		if err != nil {
+			return err
 		}
-		lucia.ClearSessionCookie(c)
+
+		user, err := userSrv.GetUser(c.Context(), userID)
+		if err != nil {
+			return err
+		}
+
+		// Generate JWT tokens
+		accessToken, err := jwtService.GenerateToken(user)
+		if err != nil {
+			return errors.ErrUnexpected("Failed to generate access token")
+		}
+
+		refreshToken, err := jwtService.GenerateRefreshToken(user.ID)
+		if err != nil {
+			return errors.ErrUnexpected("Failed to generate refresh token")
+		}
+
+		// Return JSON with tokens instead of using cookies
+		return c.JSON(fiber.Map{
+			"access_token":  accessToken,
+			"refresh_token": refreshToken,
+			"expires_in":    int(accessTokenDuration.Seconds()),
+			"token_type":    "Bearer",
+			"user":          user,
+		})
+	})
+
+	// Refresh token endpoint
+	app.Post("/refresh-token", func(c *fiber.Ctx) error {
+		type Request struct {
+			RefreshToken string `json:"refresh_token"`
+		}
+
+		var req Request
+		if err := c.BodyParser(&req); err != nil {
+			return errors.ErrBadRequest("Invalid request body")
+		}
+
+		// Validate refresh token
+		userID, err := jwtService.ValidateRefreshToken(req.RefreshToken)
+		if err != nil {
+			return errors.ErrUnauthorized("Invalid refresh token")
+		}
+
+		// Get user
+		user, err := userSrv.GetUser(c.Context(), userID)
+		if err != nil {
+			return err
+		}
+
+		// Generate new access token
+		accessToken, err := jwtService.GenerateToken(user)
+		if err != nil {
+			return errors.ErrUnexpected("Failed to generate access token")
+		}
+
+		return c.JSON(fiber.Map{
+			"access_token": accessToken,
+			"expires_in":   int(accessTokenDuration.Seconds()),
+			"token_type":   "Bearer",
+		})
+	})
+
+	// Logout is a client-side operation with JWT, but we keep an endpoint for compatibility
+	app.Post("/logout", func(c *fiber.Ctx) error {
+		// JWT logout is handled client-side by discarding the tokens
 		return c.SendString("Logged out successfully")
 	})
 
 	// Start server
+	fmt.Printf("Starting server on port %s\n", conf.Port)
 	app.Listen(conf.Port)
 }

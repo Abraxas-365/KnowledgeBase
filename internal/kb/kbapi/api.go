@@ -6,15 +6,14 @@ import (
 	"time"
 
 	kbsrv "github.com/Abraxas-365/opd/internal/kb/kbasesrv"
-	"github.com/Abraxas-365/opd/internal/user"
+	"github.com/Abraxas-365/opd/pkg/middleware" // Updated import
 	"github.com/Abraxas-365/toolkit/pkg/errors"
-	"github.com/Abraxas-365/toolkit/pkg/lucia"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/limiter"
 )
 
 // SetupRoutes sets up the API routes for the knowledge base service
-func SetupRoutes(app *fiber.App, service *kbsrv.Service, authMiddleware *lucia.AuthMiddleware[*user.User]) {
+func SetupRoutes(app *fiber.App, service *kbsrv.Service, authMiddleware *middleware.JWTAuthMiddleware) { // Changed type here
 	// Define the route for completing answers with metadata
 	limiterGroup := app.Group("/chat", limiter.New(limiter.Config{
 		Max:        100,           // Maximum number of requests per IP
@@ -51,11 +50,9 @@ func SetupRoutes(app *fiber.App, service *kbsrv.Service, authMiddleware *lucia.A
 		type Request struct {
 			FileName string `json:"fileName"`
 		}
-		session := lucia.GetSession(c)
-		userID, err := session.UserIDToString()
-		if err != nil {
-			return err
-		}
+
+		// Get user ID from context using the JWT middleware
+		userID := c.Locals("userID").(string)
 
 		var req Request
 		if err := c.BodyParser(&req); err != nil {
@@ -99,6 +96,12 @@ func SetupRoutes(app *fiber.App, service *kbsrv.Service, authMiddleware *lucia.A
 	})
 
 	app.Delete("/objects/:id", authMiddleware.RequireAuth(), func(c *fiber.Ctx) error {
+		// Check if user is admin
+		isAdmin := c.Locals("isAdmin")
+		if isAdmin == nil || !isAdmin.(bool) {
+			return errors.ErrForbidden("Admin access required")
+		}
+
 		// Get file id from path parameter
 		fileId := c.Params("id")
 
@@ -116,13 +119,20 @@ func SetupRoutes(app *fiber.App, service *kbsrv.Service, authMiddleware *lucia.A
 	})
 
 	// Endpoint to start the ingestion job for syncing knowledge base
-	app.Post("/sync-knowledge-base", func(c *fiber.Ctx) error {
+	app.Post("/sync-knowledge-base", authMiddleware.RequireAuth(), func(c *fiber.Ctx) error {
+		// Check if user is admin
+		isAdmin := c.Locals("isAdmin")
+		if isAdmin == nil || !isAdmin.(bool) {
+			return errors.ErrForbidden("Admin access required")
+		}
+
 		output, err := service.SyncKnowledgeBase(context.TODO())
 		if err != nil {
 			return err
 		}
 		return c.JSON(output)
 	})
+
 	app.Get("/objects", authMiddleware.RequireAuth(), func(c *fiber.Ctx) error {
 		// Get page and page size from query parameters
 		page, err := strconv.Atoi(c.Query("page", "1"))

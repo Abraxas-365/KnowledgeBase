@@ -66,3 +66,12 @@ func (s *PostgresStore) CreateChatUser(ctx context.Context, u chatuser.ChatUser)
 
 	return &u, nil
 }
+
+func (s *PostgresStore) GetTotalCount(ctx context.Context, query string, args ...interface{}) (int, error) {
+	var total int
+	err := s.db.GetContext(ctx, &total, query, args...)
+	if err != nil {
+		return 0, errors.ErrDatabase(fmt.Sprintf("Failed to get total count: %v", err))
+	}
+	return total, nil
+}

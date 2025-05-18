@@ -1,20 +1,18 @@
 package analiticsapi
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/Abraxas-365/opd/internal/analitics/analiticssrv"
-	"github.com/Abraxas-365/opd/internal/user"
+	"github.com/Abraxas-365/opd/pkg/middleware"
 	"github.com/Abraxas-365/toolkit/pkg/errors"
-	"github.com/Abraxas-365/toolkit/pkg/lucia"
 	"github.com/gofiber/fiber/v2"
 )
 
 func SetupRoutes(
 	app *fiber.App,
 	service *analiticssrv.Service,
-	authMiddleware *lucia.AuthMiddleware[*user.User],
+	authMiddleware *middleware.JWTAuthMiddleware,
 ) {
 	app.Get("/analytics", authMiddleware.RequireAuth(), getAnalytics(service))
 	app.Get("/analytics/daily/users", authMiddleware.RequireAuth(), getDailyUsers(service))
@@ -195,7 +193,6 @@ func getDailyInteractions(service *analiticssrv.Service) fiber.Handler {
 }
 
 func exportDatabase(service *analiticssrv.Service) fiber.Handler {
-	fmt.Println("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
 	return func(c *fiber.Ctx) error {
 		// Parse query parameters for date range
 		startDateStr := c.Query("start_date")
@@ -245,7 +242,6 @@ func exportDatabase(service *analiticssrv.Service) fiber.Handler {
 					"error": err.Error(),
 				})
 			case errors.IsDatabaseError(err):
-				fmt.Println(err)
 				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 					"error": "Database error occurred",
 				})
