@@ -23,4 +23,31 @@ export DATABASE_URL="postgresql://myuser:mypassword@localhost:5432/mydatabase"
 
 export REDIRECT_AFTER_LOGIN="http://localhost:3001"
 
+
+# Paywall Rate Limiting Configuration
+# Anonymous users (not logged in) - requests per day
+export PAYWALL_ANONYMOUS_LIMIT="5"
+
+# Free tier users - requests per day
+export PAYWALL_FREE_TIER_LIMIT="50"
+
+# Linko Plus users - requests per day
+export PAYWALL_LINKO_PLUS_LIMIT="200"
+
+# Linko VIP users - requests per day
+export PAYWALL_LINKO_VIP_LIMIT="1000"
+
+# Time window for rate limiting (in hours)
+# All tiers use the same window (24 hours = daily limits)
+export PAYWALL_WINDOW_HOURS="24"
+
+echo "🚀 Starting Knowledge Base with Paywall System..."
+echo "📊 Rate Limits Configuration:"
+echo "   Anonymous Users: ${PAYWALL_ANONYMOUS_LIMIT} requests per ${PAYWALL_WINDOW_HOURS} hours"
+echo "   Free Tier:       ${PAYWALL_FREE_TIER_LIMIT} requests per ${PAYWALL_WINDOW_HOURS} hours"
+echo "   Linko Plus:      ${PAYWALL_LINKO_PLUS_LIMIT} requests per ${PAYWALL_WINDOW_HOURS} hours"
+echo "   Linko VIP:       ${PAYWALL_LINKO_VIP_LIMIT} requests per ${PAYWALL_WINDOW_HOURS} hours"
+echo "   Admins:          Unlimited"
+echo ""
+
 go run cmd/main.go

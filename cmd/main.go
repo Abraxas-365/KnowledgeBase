@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/Abraxas-365/opd/internal/analitics/analiticsapi"
@@ -46,6 +48,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	defer db.Close()
 
 	// Initialize repositories and services
 	userRepo := userinfra.NewUserStore(db)
@@ -121,7 +124,16 @@ func main() {
 	jwtService := jwt.NewJWTService(jwtSecret, accessTokenDuration, refreshTokenDuration)
 	jwtMiddleware := middleware.NewJWTAuthMiddleware(jwtService, userSrv)
 
-	app := fiber.New()
+	// Initialize paywall rate limiter with custom configuration
+	paywallConfig := getPaywallConfig()
+	paywallLimiter := middleware.NewPaywallRateLimiter(paywallConfig)
+
+	// Ensure cleanup happens on shutdown
+	defer paywallLimiter.Stop()
+
+	app := fiber.New(fiber.Config{
+		ErrorHandler: errors.ErrorHandler,
+	})
 
 	// Apply JWT middleware globally
 	app.Use(jwtMiddleware.AuthMiddleware())
@@ -130,12 +142,13 @@ func main() {
 	app.Use(fiberCors.New(fiberCors.Config{
 		AllowOrigins:     conf.AllowOrigins,
 		AllowCredentials: true,
-		AllowHeaders:     "Origin, Content-Type, Accept, Authorization",
+		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, X-RateLimit-Tier",
 		AllowMethods:     "GET,POST,HEAD,PUT,DELETE,PATCH,OPTIONS",
+		ExposeHeaders:    "X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, X-RateLimit-Tier",
 	}))
 
-	// Setup API routes
-	kbapi.SetupRoutes(app, kbSerive, jwtMiddleware)
+	// Setup API routes with paywall integration
+	kbapi.SetupRoutes(app, kbSerive, jwtMiddleware, paywallLimiter)
 	userapi.SetupRoutes(app, userSrv, jwtMiddleware)
 	analiticsapi.SetupRoutes(app, analSrv, jwtMiddleware)
 	chatuserapi.SetupRoutes(app, chatUserSrv, jwtMiddleware)
@@ -245,7 +258,72 @@ func main() {
 		return c.SendString("Logged out successfully")
 	})
 
-	// Start server
-	fmt.Printf("Starting server on port %s\n", conf.Port)
-	app.Listen(conf.Port)
+	// Graceful shutdown setup
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+
+	// Start server in a goroutine
+	go func() {
+		fmt.Printf("Starting server on port %s\n", conf.Port)
+		if err := app.Listen(conf.Port); err != nil {
+			fmt.Printf("Server error: %v\n", err)
+		}
+	}()
+
+	// Wait for interrupt signal
+	<-c
+	fmt.Println("\nShutting down server...")
+
+	// Shutdown with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := app.ShutdownWithContext(ctx); err != nil {
+		fmt.Printf("Server shutdown error: %v\n", err)
+	}
+
+	fmt.Println("Server stopped")
+}
+
+// getPaywallConfig returns the paywall configuration, allowing customization via environment variables
+func getPaywallConfig() middleware.RateLimitConfig {
+	config := middleware.DefaultRateLimitConfig()
+
+	// Allow customization via environment variables
+	if limit := os.Getenv("PAYWALL_ANONYMOUS_LIMIT"); limit != "" {
+		if val, err := strconv.Atoi(limit); err == nil && val > 0 {
+			config.AnonymousLimit = val
+		}
+	}
+
+	if limit := os.Getenv("PAYWALL_FREE_TIER_LIMIT"); limit != "" {
+		if val, err := strconv.Atoi(limit); err == nil && val > 0 {
+			config.FreeTierLimit = val
+		}
+	}
+
+	if limit := os.Getenv("PAYWALL_LINKO_PLUS_LIMIT"); limit != "" {
+		if val, err := strconv.Atoi(limit); err == nil && val > 0 {
+			config.LinkoPlusLimit = val
+		}
+	}
+
+	if limit := os.Getenv("PAYWALL_LINKO_VIP_LIMIT"); limit != "" {
+		if val, err := strconv.Atoi(limit); err == nil && val > 0 {
+			config.LinkoVIPLimit = val
+		}
+	}
+
+	// Allow customization of time windows
+	if window := os.Getenv("PAYWALL_WINDOW_HOURS"); window != "" {
+		if hours, err := strconv.Atoi(window); err == nil && hours > 0 {
+			duration := time.Duration(hours) * time.Hour
+			config.AnonymousWindow = duration
+			config.FreeTierWindow = duration
+			config.LinkoPlusWindow = duration
+			config.LinkoVIPWindow = duration
+		}
+	}
+
+	return config
 }
