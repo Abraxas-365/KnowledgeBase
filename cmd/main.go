@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -38,8 +39,21 @@ import (
 	"github.com/aws/aws-sdk-go/service/bedrockagent"
 	"github.com/gofiber/fiber/v2"
 	fiberCors "github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 )
+
+var tempTokenStore = make(map[string]TokenData)
+var tempTokenMutex sync.RWMutex
+
+type TokenData struct {
+	AccessToken  string    `json:"access_token"`
+	RefreshToken string    `json:"refresh_token"`
+	ExpiresIn    int       `json:"expires_in"`
+	TokenType    string    `json:"token_type"`
+	User         user.User `json:"user"`
+	CreatedAt    time.Time `json:"created_at"`
+}
 
 func main() {
 	conf := conf.Load()
@@ -170,50 +184,101 @@ func main() {
 	app.Get("/login/google/callback", func(c *fiber.Ctx) error {
 		state := c.Cookies("oauth_state")
 		if state == "" || state != c.Query("state") {
-			return errors.ErrUnauthorized("Invalid state")
+			return c.Redirect(fmt.Sprintf("%s/auth?error=%s", conf.RedirectAfterLogin, "invalid_state"))
 		}
 
 		code := c.Query("code")
 		if code == "" {
-			return errors.ErrBadRequest("Missing code")
+			return c.Redirect(fmt.Sprintf("%s/auth?error=%s", conf.RedirectAfterLogin, "missing_code"))
 		}
 
 		// Use the lucia auth service to handle the OAuth callback
 		session, err := authSrv.HandleCallback(c.Context(), "google", code)
 		if err != nil {
-			return err
+			return c.Redirect(fmt.Sprintf("%s/auth?error=%s", conf.RedirectAfterLogin, "oauth_failed"))
 		}
 
 		// Get user from session
 		userID, err := session.UserIDToString()
 		if err != nil {
-			return err
+			return c.Redirect(fmt.Sprintf("%s/auth?error=%s", conf.RedirectAfterLogin, "session_failed"))
 		}
 
 		user, err := userSrv.GetUser(c.Context(), userID)
 		if err != nil {
-			return err
+			return c.Redirect(fmt.Sprintf("%s/auth?error=%s", conf.RedirectAfterLogin, "user_failed"))
 		}
 
 		// Generate JWT tokens
 		accessToken, err := jwtService.GenerateToken(user)
 		if err != nil {
-			return errors.ErrUnexpected("Failed to generate access token")
+			return c.Redirect(fmt.Sprintf("%s/auth?error=%s", conf.RedirectAfterLogin, "token_failed"))
 		}
 
 		refreshToken, err := jwtService.GenerateRefreshToken(user.ID)
 		if err != nil {
-			return errors.ErrUnexpected("Failed to generate refresh token")
+			return c.Redirect(fmt.Sprintf("%s/auth?error=%s", conf.RedirectAfterLogin, "refresh_failed"))
 		}
 
-		// Return JSON with tokens instead of using cookies
-		return c.JSON(fiber.Map{
-			"access_token":  accessToken,
-			"refresh_token": refreshToken,
-			"expires_in":    int(accessTokenDuration.Seconds()),
-			"token_type":    "Bearer",
-			"user":          user,
-		})
+		// Generate a temporary token for secure exchange
+		tempToken := uuid.New().String()
+
+		// Store tokens temporarily (with expiration)
+		tempTokenMutex.Lock()
+		tempTokenStore[tempToken] = TokenData{
+			AccessToken:  accessToken,
+			RefreshToken: refreshToken,
+			ExpiresIn:    int(accessTokenDuration.Seconds()),
+			TokenType:    "Bearer",
+			User:         *user,
+			CreatedAt:    time.Now(),
+		}
+		tempTokenMutex.Unlock()
+
+		// Clean up expired temp tokens in background
+		go func() {
+			time.Sleep(10 * time.Minute)
+			tempTokenMutex.Lock()
+			delete(tempTokenStore, tempToken)
+			tempTokenMutex.Unlock()
+		}()
+
+		// Redirect to frontend with temporary token
+		redirectURL := fmt.Sprintf("%s/auth/callback?token=%s", conf.RedirectAfterLogin, tempToken)
+		return c.Redirect(redirectURL)
+	})
+
+	app.Get("/auth/exchange/:token", func(c *fiber.Ctx) error {
+		tempToken := c.Params("token")
+
+		tempTokenMutex.RLock()
+		tokenData, exists := tempTokenStore[tempToken]
+		tempTokenMutex.RUnlock()
+
+		if !exists {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+				"error": "Invalid or expired token",
+			})
+		}
+
+		// Check if token is expired (10 minutes max)
+		if time.Since(tokenData.CreatedAt) > 10*time.Minute {
+			tempTokenMutex.Lock()
+			delete(tempTokenStore, tempToken)
+			tempTokenMutex.Unlock()
+
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+				"error": "Token expired",
+			})
+		}
+
+		// Remove the temporary token (one-time use)
+		tempTokenMutex.Lock()
+		delete(tempTokenStore, tempToken)
+		tempTokenMutex.Unlock()
+
+		// Return the real tokens
+		return c.JSON(tokenData)
 	})
 
 	// Refresh token endpoint

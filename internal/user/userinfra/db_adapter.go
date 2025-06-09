@@ -17,7 +17,7 @@ type PostgresStore struct {
 func (s *PostgresStore) GetUserByID(ctx context.Context, userID string) (*user.User, error) {
 	var u user.User
 
-	query := `SELECT id, email, is_admin, provider, provider_id FROM "user" WHERE id = $1`
+	query := `SELECT id, email, is_admin, provider, provider_id, role, subscription_type FROM "user" WHERE id = $1`
 	err := s.db.GetContext(ctx, &u, query, userID)
 	if err != nil {
 		return nil, err
@@ -32,7 +32,7 @@ func NewUserStore(db *sqlx.DB) *PostgresStore {
 
 // GetUserByProviderID retrieves a user by provider and provider ID
 func (s *PostgresStore) GetUserByProviderID(ctx context.Context, provider, providerID string) (*user.User, error) {
-	query := `SELECT id, email, is_admin, provider, provider_id FROM "user" WHERE provider = $1 AND provider_id = $2`
+	query := `SELECT id, email, is_admin, provider, provider_id, role, subscription_type FROM "user" WHERE provider = $1 AND provider_id = $2`
 	var u user.User
 	err := s.db.GetContext(ctx, &u, query, provider, providerID)
 	if err != nil {
@@ -43,8 +43,11 @@ func (s *PostgresStore) GetUserByProviderID(ctx context.Context, provider, provi
 
 // CreateUser inserts a new user
 func (s *PostgresStore) CreateUser(ctx context.Context, u *user.User) (*user.User, error) {
-	query := `INSERT INTO "user" (id, email, provider, provider_id, is_admin) VALUES ($1, $2, $3, $4, $5) RETURNING id, email, is_admin`
-	err := s.db.QueryRowContext(ctx, query, u.ID, u.Email, u.Provider, u.ProviderID, u.IsAdmin).Scan(&u.ID, &u.Email, &u.IsAdmin)
+	query := `INSERT INTO "user" (id, email, provider, provider_id, is_admin, role, subscription_type) 
+			  VALUES ($1, $2, $3, $4, $5, $6, $7) 
+			  RETURNING id, email, is_admin, role, subscription_type`
+	err := s.db.QueryRowContext(ctx, query, u.ID, u.Email, u.Provider, u.ProviderID, u.IsAdmin, u.Role, u.SubscriptionType).Scan(
+		&u.ID, &u.Email, &u.IsAdmin, &u.Role, &u.SubscriptionType)
 	if err != nil {
 		return nil, errors.ErrDatabase(fmt.Sprintf("Failed to create user: %v", err))
 	}
@@ -53,8 +56,11 @@ func (s *PostgresStore) CreateUser(ctx context.Context, u *user.User) (*user.Use
 
 // UpdateUser updates user information
 func (s *PostgresStore) UpdateUser(ctx context.Context, u *user.User) (*user.User, error) {
-	query := `UPDATE "user" SET email = $2, is_admin = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $1 RETURNING id, email, is_admin`
-	err := s.db.QueryRowContext(ctx, query, u.ID, u.Email, u.IsAdmin).Scan(&u.ID, &u.Email, &u.IsAdmin)
+	query := `UPDATE "user" SET email = $2, is_admin = $3, role = $4, subscription_type = $5, updated_at = CURRENT_TIMESTAMP 
+			  WHERE id = $1 
+			  RETURNING id, email, is_admin, role, subscription_type`
+	err := s.db.QueryRowContext(ctx, query, u.ID, u.Email, u.IsAdmin, u.Role, u.SubscriptionType).Scan(
+		&u.ID, &u.Email, &u.IsAdmin, &u.Role, &u.SubscriptionType)
 	if err != nil {
 		return nil, errors.ErrDatabase(fmt.Sprintf("Failed to update user: %v", err))
 	}
