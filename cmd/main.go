@@ -154,9 +154,9 @@ func main() {
 
 	// Add CORS middleware
 	app.Use(fiberCors.New(fiberCors.Config{
-		AllowOrigins:     conf.AllowOrigins,
+		AllowOrigins:     "http://localhost:3001,http://localhost:3000",
 		AllowCredentials: true,
-		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, X-RateLimit-Tier",
+		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, Cookie, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, X-RateLimit-Tier",
 		AllowMethods:     "GET,POST,HEAD,PUT,DELETE,PATCH,OPTIONS",
 		ExposeHeaders:    "X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, X-RateLimit-Tier",
 	}))
